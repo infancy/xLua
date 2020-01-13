@@ -971,7 +971,10 @@ namespace XLua
         {
             try
             {
+                // translator 是 LuaEnv 初始化时生成并放入 Pool 中的
                 ObjectTranslator translator = ObjectTranslatorPool.Instance.Find(L);
+
+                // #1 parameter is C# class name
                 Type type = getType(L, translator, 1);
                 object obj = null;
                 if (type == null && LuaAPI.lua_type(L, 1) == LuaTypes.LUA_TUSERDATA)
@@ -989,18 +992,23 @@ namespace XLua
                     return LuaAPI.luaL_error(L, "xlua.access, can not find c# type");
                 }
 
+                // #2 parameter is C# DelegateBridge name
                 string fieldName = LuaAPI.lua_tostring(L, 2);
 
                 BindingFlags bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
+                // #3 parameter is lua hotfix code
                 if (LuaAPI.lua_gettop(L) > 2) // set
                 {
+                    // 为 field 或 property (DelegateBridge _Hotfix0_Update;)赋值
                     var field = type.GetField(fieldName, bindingFlags);
                     if (field != null)
                     {
+                        // translator.GetObject(L, 3 --[[ func ]], field.FieldType) 返回一个 DelegateBridge
                         field.SetValue(obj, translator.GetObject(L, 3, field.FieldType));
                         return 0;
                     }
+
                     var prop = type.GetProperty(fieldName, bindingFlags);
                     if (prop != null)
                     {

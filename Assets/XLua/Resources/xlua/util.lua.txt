@@ -101,15 +101,25 @@ local function auto_id_map()
 end
 
 --和xlua.hotfix的区别是：这个可以调用原来的函数
+-- 执行 fix 前, 先将 field 的 fix 置为 nil, 再单独执行 fix
+-- 此时如果 fix 调用 field, 就等于是在调用原函数
+-- 最后把 field 的 fix 加回去
 local function hotfix_ex(cs, field, func)
     assert(type(field) == 'string' and type(func) == 'function', 'invalid argument: #2 string needed, #3 function needed!')
+
     local function func_after(...)
-        xlua.hotfix(cs, field, nil)
-        local ret = {func(...)}
-        xlua.hotfix(cs, field, func_after)
+
+        -- HotfixN_FuncNameM = nil
+        -- ...
+        -- HotfixN_FuncNameM = func_after
+        xlua.hotfix(cs, field, nil) -- fix 为空, 调用时执行原来的逻辑
+        local ret = {func(...)} -- 单独执行 fix, 获得 fix 的返回值(fix 可以调用原函数, 转发其返回值, 此时相当于把原逻辑和修复逻辑都执行了一遍)
+        xlua.hotfix(cs, field, func_after) -- 2..n. 接下来每次执行 func_after, 会先把 fix 置为 nil, 所以还需要再调用 hotfix 注入 func_after, 相当于回到了 1
+
         return unpack(ret)
     end
-    xlua.hotfix(cs, field, func_after)
+
+    xlua.hotfix(cs, field, func_after) -- 1. 第一次执行 hotfix_ex, 只注入了 func_after
 end
 
 local function bind(func, obj)

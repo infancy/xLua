@@ -28,7 +28,6 @@ namespace XLua
         public const string MAIN_SHREAD = "xlua_main_thread";
 
         internal RealStatePtr rawL;
-
         internal RealStatePtr L
         {
             get
@@ -85,8 +84,8 @@ namespace XLua
                 LuaAPI.luaopen_i64lib(rawL);
 
                 translator = new ObjectTranslator(this, rawL);
-                translator.createFunctionMetatable(rawL);
-                translator.OpenLib(rawL);
+                translator.createFunctionMetatable(rawL); // 记录自身的 type_id
+                translator.OpenLib(rawL); // 将 C# 中的方法注册到 xlua 环境
                 ObjectTranslatorPool.Instance.Add(rawL, translator);
 
                 LuaAPI.lua_atpanic(rawL, StaticLuaCallbacks.Panic);
@@ -462,6 +461,7 @@ namespace XLua
             }
         }
 
+        // xlua 初始化的代码
         private string init_xlua = @" 
             local metatable = {}
             local rawget = rawget
@@ -471,6 +471,7 @@ namespace XLua
             local load_assembly = xlua.load_assembly
 
             function metatable:__index(key) 
+                -- cache_get
                 local fqn = rawget(self,'.fqn')
                 fqn = ((fqn and fqn .. '.') or '') .. key
 
@@ -552,31 +553,47 @@ namespace XLua
                 end
             end
 
+
+            -- 重复调用 xlua.hotfix, 相当于给 __HotfixN_FuncNameM 赋新值, 参考 util.lua.txt/107line: hotfix_ex
             xlua.hotfix = function(cs, field, func)
                 if func == nil then func = false end
+
+                -- tbl = {[field] = func}
                 local tbl = (type(field) == 'table') and field or {[field] = func}
+
                 for k, v in pairs(tbl) do
                     local cflag = ''
                     if k == '.ctor' then
                         cflag = '_c'
                         k = 'ctor'
                     end
+
+                    -- f = func
                     local f = type(v) == 'function' and v or nil
+
                     xlua.access(cs, cflag .. '__Hotfix0_'..k, f) -- at least one
+                 -- xlua.access(cs, cflag .. '__Hotfix0_'..field, func) -- 至少修复一个
+                 -- xlua.access -> ObjectTranslator.cs/688line: XLua.StaticLuaCallbacks.XLuaAccess, 会对 C# 类里的 DelegateBridge 赋值
+
+                    --! 这里会尝试替换掉所有同名函数的实现, 需要在热修复代码里根据函数参数来区分
                     pcall(function()
                         for i = 1, 99 do
                             xlua.access(cs, cflag .. '__Hotfix'..i..'_'..k, f)
                         end
                     end)
                 end
+
                 xlua.private_accessible(cs)
             end
+
+
             xlua.getmetatable = function(cs)
                 return xlua.metatable_operation(cs)
             end
             xlua.setmetatable = function(cs, mt)
                 return xlua.metatable_operation(cs, mt)
             end
+
             xlua.setclass = function(parent, name, impl)
                 impl.UnderlyingSystemType = parent[name].UnderlyingSystemType
                 rawset(parent, name, impl)
@@ -596,10 +613,13 @@ namespace XLua
             end
             ";
 
+        // filepath: （ref类型）输入是require的参数，如果需要支持调试，需要输出真实路径。
+        // 返回值:    如果返回null，代表加载该源下无合适的文件，否则返回UTF8编码的byte[]
         public delegate byte[] CustomLoader(ref string filepath);
 
         internal List<CustomLoader> customLoaders = new List<CustomLoader>();
 
+        //! require
         //loader : CustomLoader， filepath参数：（ref类型）输入是require的参数，如果需要支持调试，需要输出真实路径。
         //                        返回值：如果返回null，代表加载该源下无合适的文件，否则返回UTF8编码的byte[]
         public void AddLoader(CustomLoader loader)
@@ -618,6 +638,7 @@ namespace XLua
             buildin_initer.Add(name, initer);
         }
 
+        // lua_gc
         //The garbage-collector pause controls how long the collector waits before starting a new cycle. 
         //Larger values make the collector less aggressive. Values smaller than 100 mean the collector 
         //will not wait to start a new cycle. A value of 200 means that the collector waits for the total 

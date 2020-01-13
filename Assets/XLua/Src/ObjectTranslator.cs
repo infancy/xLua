@@ -55,7 +55,7 @@ namespace XLua
         LUA_TBOOLEAN = 1,
         LUA_TTABLE = 5,
         LUA_TFUNCTION = 6,
-        LUA_TUSERDATA = 7,
+        LUA_TUSERDATA = 7, // user_data
         LUA_TTHREAD = 8,
         LUA_TLIGHTUSERDATA = 2
     }
@@ -455,22 +455,26 @@ namespace XLua
 
             throw new InvalidCastException("This type must add to CSharpCallLua: " + delegateType.GetFriendlyName());
         }
+
         Dictionary<int, WeakReference> delegate_bridges = new Dictionary<int, WeakReference>();
         public object CreateDelegateBridge(RealStatePtr L, Type delegateType, int idx)
         {
             LuaAPI.lua_pushvalue(L, idx);
             LuaAPI.lua_rawget(L, LuaIndexes.LUA_REGISTRYINDEX);
+
             if (!LuaAPI.lua_isnil(L, -1))
             {
                 int referenced = LuaAPI.xlua_tointeger(L, -1);
                 LuaAPI.lua_pop(L, 1);
 
+                // 是否已经添加过了
                 if (delegate_bridges[referenced].IsAlive)
                 {
                     if (delegateType == null)
                     {
                         return delegate_bridges[referenced].Target;
                     }
+
                     DelegateBridgeBase exist_bridge = delegate_bridges[referenced].Target as DelegateBridgeBase;
                     Delegate exist_delegate;
                     if (exist_bridge.TryGetDelegate(delegateType, out exist_delegate))
@@ -495,6 +499,7 @@ namespace XLua
             LuaAPI.lua_pushvalue(L, idx);
             LuaAPI.lua_pushnumber(L, reference);
             LuaAPI.lua_rawset(L, LuaIndexes.LUA_REGISTRYINDEX);
+
             DelegateBridgeBase bridge;
             try
             {
@@ -506,6 +511,8 @@ namespace XLua
                 else
 #endif
                 {
+                    // 生成 C# 的每个 DelegateBridge 时记录它到 lua 代码的引用 reference
+                    // 在被修复的 C# 函数里调用 _HotfixN_FuncName.__Gen_Delegate_ImplN 时, 会用这个 reference 找到对应的 lua 代码
                     bridge = new DelegateBridge(reference, luaEnv);
                 }
             }
@@ -676,12 +683,16 @@ namespace XLua
             LuaAPI.xlua_pushasciistring(L, "load_assembly");
 			LuaAPI.lua_pushstdcallcfunction(L,loadAssemblyFunction);
             LuaAPI.lua_rawset(L, -3);
+
+            // xlua.access -> XLua.StaticLuaCallbacks.XLuaAccess
             LuaAPI.xlua_pushasciistring(L, "access");
             LuaAPI.lua_pushstdcallcfunction(L, StaticLuaCallbacks.XLuaAccess);
             LuaAPI.lua_rawset(L, -3);
+
             LuaAPI.xlua_pushasciistring(L, "private_accessible");
             LuaAPI.lua_pushstdcallcfunction(L, StaticLuaCallbacks.XLuaPrivateAccessible);
             LuaAPI.lua_rawset(L, -3);
+
             LuaAPI.xlua_pushasciistring(L, "metatable_operation");
             LuaAPI.lua_pushstdcallcfunction(L, StaticLuaCallbacks.XLuaMetatableOperation);
             LuaAPI.lua_rawset(L, -3);
@@ -864,6 +875,7 @@ namespace XLua
             return objectCheckers.GetChecker(type)(L, index);
         }
 
+        // 
         public object GetObject(RealStatePtr L, int index, Type type)
         {
             int udata = LuaAPI.xlua_tocsobj_safe(L, index);
@@ -901,6 +913,7 @@ namespace XLua
             Func<RealStatePtr, int, T> get_func;
             if (tryGetGetFuncByType(typeof(T), out get_func))
             {
+                // v = lua_gettype(L, index);
                 v = get_func(L, index);
             }
             else
@@ -914,6 +927,7 @@ namespace XLua
             Action<RealStatePtr, T> push_func;
             if (tryGetPushFuncByType(typeof(T), out push_func))
             {
+                // lua_pushtype(L, v);
                 push_func(L, v);
             }
             else
@@ -1551,6 +1565,7 @@ namespace XLua
 
         private Dictionary<Type, Delegate> get_func_with_type = null;
 
+        // get lua_to_type
         bool tryGetGetFuncByType<T>(Type type, out T func) where T : class
         {
             if (get_func_with_type == null)
